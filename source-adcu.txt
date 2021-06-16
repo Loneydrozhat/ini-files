@@ -1,0 +1,845 @@
+#include-once
+#include "AD.au3"
+#include <GUIConstantsEx.au3>
+#include <ListViewConstants.au3>
+#include <WindowsConstants.au3>
+#include <GuiButton.au3>
+#include <Excel.au3>
+#include <GuiListView.au3>
+#include <Misc.au3>
+#include <Math.au3>
+#include <ColorConstants.au3>
+#include "AD-Tools_User.au3"
+
+Global $aListLeft[1], $aDisplayLeft[1][1] ; Array with entries for the left hand ListView
+Global $aListRight[1], $aDisplayRight[1][1] ; Array with entries for the right hand ListView
+Global $aGroupDescription[1][1] ; Description for groups taken from the Ini file
+Global $sFormTitle = "Comparador de Grupos"
+Global $sVersion = FileGetVersion(@ScriptFullPath, "FileVersion") ; Version
+Global $sVersionDate = StringRegExpReplace(FileGetTime(@ScriptFullPath, 0, 1), "(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})", "$1/$2/$3 $4:$5:$6") ; Date/time last changed
+Global $sObjectLeft = "", $sObjectRight = "" ; User to display on the left/right ListView
+Global $iSort = 0 ; Sort direction for _GUICtrlListView_SimpleSort
+Global $sPane = "Left" ; Selected ListView (Left or Right)
+Global $sFilter = "" ; Selected filter: L(eft), R(ight), B(oth)
+Global $sSelected = "" ; Selected ListView entry/entries
+Global $sMainUserFunction, $sLVHeader, $sLVProperties, $aLVProperties, $sLVUserFunction, $bLVDataFunction, $sDetailUserFunction ; Variables from ini-file
+Global $sTmp, $sTmp2, $nMsg, $sDepartment, $iAccess, $iKey, $hMain_User = -1, $hCMLeft_User = -1, $hCMRight_User = -1, $hGUIListSearch, $hSearchForm, $hGUIListSearch, $hSearchDblClick
+Global $sObjectLeftOld = "", $sObjectRightOld = "", $iFilteredLeft, $iFilteredRight
+Global $iColumns = 3 ; Columns to be displayed in the Listview
+
+_AD_Open()
+If @error Then Exit MsgBox($MB_ICONERROR, $sFormTitle, "Error " & @error & " ao tentar fazer a conexão com o AD!")
+; Check permissions
+$iAccess = _Check_Access($sFormTitle)
+; A return value >= 255 denotes a valid permission
+If $iAccess < 0 Then
+	MsgBox($MB_ICONERROR, $sFormTitle, "Você não tem a permissão necessária para utilizar este programa!")
+	Exit
+EndIf
+_Read_Ini_File()
+;----
+; GUI
+;----
+
+Global $hMainForm = GUICreate($sFormTitle, 500, 701, -1, -1, BitOR($WS_CAPTION, $WS_MINIMIZEBOX, $WS_SIZEBOX))
+; Left pane
+GUICtrlCreateLabel("Matrícula:", 8, 6, 70, 17)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKLEFT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+Global $GUIInputLeft = GUICtrlCreateInput("", 80, 2, 126, 21)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKLEFT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+Global $GUISearchLeft = GUICtrlCreateButton("", 208, 2, 21, 21, $BS_BITMAP)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKLEFT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+_GUICtrlButton_SetImage(-1, "shell32.dll", 22, False)
+Global $hGUILabelLeft = GUICtrlCreateLabel("", 232, 6, 178, 17)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKLEFT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+; Right pane
+Global $hGUITextRight = GUICtrlCreateLabel("Matrícula:", 528, 6, 70, 17)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKRIGHT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+Global $GUIInputRight = GUICtrlCreateInput("", 600, 2, 126, 21)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKRIGHT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+Global $GUISearchRight = GUICtrlCreateButton("", 728, 2, 21, 21, $BS_BITMAP)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKRIGHT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+_GUICtrlButton_SetImage(-1, "shell32.dll", 22, False)
+Global $hGUILabelRight = GUICtrlCreateLabel("", 752, 6, 178, 17)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKRIGHT, $GUI_DOCKWIDTH, $GUI_DOCKHEIGHT))
+; Listviews
+Global $hGUIListLeft = GUICtrlCreateListView($sLVHeader, 8, 26, 417, 625, $LVS_SHOWSELALWAYS)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKLEFT, $GUI_DOCKBOTTOM))
+GUICtrlSetBkColor(-1, $GUI_BKCOLOR_LV_ALTERNATE)
+Global $hGUIListRight = GUICtrlCreateListView($sLVHeader, 528, 26, 417, 625, $LVS_SHOWSELALWAYS)
+GUICtrlSetResizing(-1, BitOR($GUI_DOCKTOP, $GUI_DOCKRIGHT, $GUI_DOCKBOTTOM))
+GUICtrlSetBkColor(-1, $GUI_BKCOLOR_LV_ALTERNATE)
+; Filter Buttons, label
+Global $hButtonLeft = GUICtrlCreateButton("<- Filtrar", 430, 55, 93, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKTOP + $GUI_DOCKHCENTER + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+GUICtrlSetState(-1, $GUI_DISABLE)
+Global $hButtonRight = GUICtrlCreateButton("Filtrar ->", 430, 95, 93, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKTOP + $GUI_DOCKHCENTER + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+GUICtrlSetState(-1, $GUI_DISABLE)
+Global $hButtonBoth = GUICtrlCreateButton("Ambas contas", 430, 135, 93, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKTOP + $GUI_DOCKHCENTER + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+GUICtrlSetState(-1, $GUI_DISABLE)
+Global $hButtonAll = GUICtrlCreateButton("Remover Filtro", 430, 175, 93, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKTOP + $GUI_DOCKHCENTER + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+GUICtrlSetState(-1, $GUI_DISABLE)
+; Buttons
+Global $hButtonEnter = GUICtrlCreateDummy()
+Global $hButtonStrgA = GUICtrlCreateDummy()
+Global $hButtonStrgC = GUICtrlCreateDummy()
+Global $hButtonEnd = GUICtrlCreateButton("Sair", 8, 664, 105, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKLEFT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+If $sMainUserFunction <> "" Then
+	$hMain_User = GUICtrlCreateButton($sMainUserFunction, 265, 664, 105, 25, 0)
+	GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKLEFT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+EndIf
+Global $hButtonOK = GUICtrlCreateButton("OK", 384, 664, 41, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKLEFT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+Global $hButtonMail = GUICtrlCreateButton("Seleção -> Mail", 529, 664, 120, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKRIGHT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+Global $hButtonClip = GUICtrlCreateButton("Seleção -> Clipboard", 679, 664, 122, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKRIGHT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+Global $hButtonExcel = GUICtrlCreateButton("Exportar -> Excel", 430, 215, 93, 25, 0)
+GUICtrlSetResizing(-1, $GUI_DOCKBOTTOM + $GUI_DOCKRIGHT + $GUI_DOCKWIDTH + $GUI_DOCKHEIGHT)
+; Menu
+Global $FileMenu = GUICtrlCreateMenu("&File")
+Global $FileMenuExit = GUICtrlCreateMenuItem("&Exit", $FileMenu)
+;~ Global $HelpMenu = GUICtrlCreateMenu("&?")
+;~ Global $HelpMenuHelp = GUICtrlCreateMenuItem("&Help", $HelpMenu)
+;~ Global $HelpMenuAbout = GUICtrlCreateMenuItem("&About", $HelpMenu)
+; Context Menu left pane
+Global $hCMLeft = GUICtrlCreateContextMenu($hGUIListLeft)
+Global $hCMLeft_Detail = GUICtrlCreateMenuItem("Detalhes", $hCMLeft)
+If $sLVUserFunction <> "" Then $hCMLeft_User = GUICtrlCreateMenuItem($sLVUserFunction, $hCMLeft)
+; Context Menu right pane
+Global $hCMRight = GUICtrlCreateContextMenu($hGUIListRight)
+Global $hCMRight_Detail = GUICtrlCreateMenuItem("Detalhes", $hCMRight)
+If $sLVUserFunction <> "" Then $hCMRight_User = GUICtrlCreateMenuItem($sLVUserFunction, $hCMRight)
+; Check passed parameters. Can be two user accounts to compare
+If $CMDLine[0] >= 1 Then $sObjectLeft = $CMDLine[1]
+If $CMDLine[0] >= 2 Then $sObjectRight = $CMDLine[2]
+GUICtrlSetData($GUIInputLeft, $sObjectLeft)
+GUICtrlSetData($GUIInputRight, $sObjectRight)
+If $CMDLine[0] > 0 Then
+	$nMsg = $hButtonOK
+	$iKey = $hButtonOK
+	_GetObjectList($sObjectLeft, $sObjectRight, $sObjectLeftOld, $sObjectRightOld)
+EndIf
+
+; Set accelerators to handle Enter, Ctrl-A and Ctrl-C
+Global $AccelKeys[3][2] = [["{ENTER}", $hButtonEnter], ["^a", $hButtonStrgA], ["^c", $hButtonStrgC]]
+GUISetAccelerators($AccelKeys)
+GUIRegisterMsg($WM_NOTIFY, "_WM_NOTIFY")
+GUIRegisterMsg($WM_SIZE, "_WM_SIZE") ; Monitors resizing of the GUI (positioning of Controls)
+GUIRegisterMsg($WM_GETMINMAXINFO, "_WM_GETMINMAXINFO") ; Monitors resizing of the GUI (min/max size)
+OnAutoItExitRegister("_Exit")
+
+$aPos = IniReadSection("AD-Tools.ini", "ADCU-Window")
+If @error = 0 Then WinMove($hMainForm, "", $aPos[1][1], $aPos[2][1], $aPos[3][1], $aPos[4][1])
+
+GUISetState(@SW_SHOW)
+
+;----
+; GUI
+;----
+While 1
+	$nMsg = GUIGetMsg()
+	Select
+		Case $nMsg = $GUI_EVENT_CLOSE Or $nMsg = $hButtonEnd Or $nMsg = $FileMenuExit
+			If MsgBox(BitOR($MB_ICONQUESTION, $MB_OKCANCEL), $sFormTitle, "Tem certeza que deseja encerrar o programa?") = 1 Then
+				_AD_Close()
+				Exit
+			EndIf
+		Case $nMsg = $hButtonOK Or $nMsg = $hButtonEnter Or $nMsg = $hButtonLeft Or $nMsg = $hButtonRight Or $nMsg = $hButtonBoth Or $nMsg = $hButtonAll
+			$iKey = $nMsg
+			If $iKey = $hButtonEnter Then $iKey = $hButtonOK ; Simulate the OK button when Enter was pressed
+			If $iKey = $hButtonOK Then $sFilter = ""
+			If $iKey = $hButtonLeft Then $sFilter = "L"
+			If $iKey = $hButtonRight Then $sFilter = "R"
+			If $iKey = $hButtonBoth Then $sFilter = "B"
+			$sObjectLeft = GUICtrlRead($GUIInputLeft)
+			$sObjectRight = GUICtrlRead($GUIInputRight)
+			If $iKey = $hButtonOK Then
+				If $sObjectLeft <> "" And _AD_ObjectExists($sObjectLeft) <> 1 Then
+					MsgBox($MB_ICONERROR, $sFormTitle, "Account '" & $sObjectLeft & "' não encontrada!")
+					ContinueLoop
+				EndIf
+				If $sObjectRight <> "" And _AD_ObjectExists($sObjectRight) <> 1 Then
+					MsgBox($MB_ICONERROR, $sFormTitle, "Account '" & $sObjectRight & "' não encontrada!")
+					ContinueLoop
+				EndIf
+			EndIf
+			$sTempleft = $sObjectLeft
+			$sTempRight = $sObjectRight
+			_GetObjectList($sObjectLeft, $sObjectRight, $sObjectLeftOld, $sObjectRightOld)
+			$sObjectLeftOld = $sObjectLeft
+			$sObjectRightOld = $sObjectRight
+		Case $nMsg = $GUISearchLeft
+			$sObjectLeft = GUICtrlRead($GUIInputLeft)
+			If $sObjectLeft <> "" Then
+				$sObjectLeft = _SearchObject($sObjectLeft)
+				If $sObjectLeft <> "" Then
+					GUICtrlSetData($GUIInputLeft, $sObjectLeft)
+					GUICtrlSendMsg($hButtonOK, $BM_CLICK, 0, 0)
+				EndIf
+			EndIf
+		Case $nMsg = $GUISearchRight
+			$sObjectRight = GUICtrlRead($GUIInputRight)
+			If $sObjectRight <> "" Then
+				$sObjectRight = _SearchObject($sObjectRight)
+				If $sObjectRight <> "" Then
+					GUICtrlSetData($GUIInputRight, $sObjectRight)
+					GUICtrlSendMsg($hButtonOK, $BM_CLICK, 0, 0)
+				EndIf
+			EndIf
+		Case $nMsg = $hCMLeft_Detail Or $nMsg = $hCMRight_Detail
+			_GetObjectDetail($sSelected)
+		Case $nMsg = $hMain_User
+			_Main_UserFunction()
+		Case $nMsg = $hCMLeft_User Or $nMsg = $hCMRight_User
+			_LV_UserFunction($sSelected)
+		Case $nMsg = $hButtonMail
+			_Mail()
+		Case $nMsg = $hButtonClip
+			_Clipboard()
+		Case $nMsg = $hButtonExcel
+			_Excel()
+		Case $nMsg = $hButtonStrgA
+			_SelectAll()
+		Case $nMsg = $hButtonStrgC
+			_Clipboard()
+	EndSelect
+WEnd
+
+;-------------------------
+; Process Windows Messages
+;-------------------------
+Func _WM_NOTIFY($hWnd, $iMsg, $iwParam, $ilParam)
+	#forceref $hWnd, $iMsg, $iwParam
+	Local $hWndFrom, $iCode, $tNMHDR, $tInfo, $iItem, $aSelected
+	$tNMHDR = DllStructCreate($tagNMHDR, $ilParam)
+	$hWndFrom = HWnd(DllStructGetData($tNMHDR, "hWndFrom"))
+	$iCode = DllStructGetData($tNMHDR, "Code")
+	Switch $hWnd ; Which GUI
+		Case $hMainForm ; Main form?
+			Switch $hWndFrom ; Which control
+				Case GUICtrlGetHandle($hGUIListLeft) ; Left listview?
+					$sPane = "Left"
+					Switch $iCode ; Which button pressed
+						Case $LVN_COLUMNCLICK ; A column was clicked
+							$tInfo = DllStructCreate($tagNMLISTVIEW, $ilParam)
+							_GUICtrlListView_SimpleSort($hGUIListLeft, $iSort, DllStructGetData($tInfo, "SubItem"))
+						Case $NM_RCLICK ; Sent by a list-view control when the user clicks an item with the right mouse button
+							$tInfo = DllStructCreate($tagNMLISTVIEW, $ilParam)
+							$iItem = DllStructGetData($tInfo, "Item")
+							; Disable context menu when no listview item was selected
+							If $iItem = -1 Then
+								GUICtrlSetState($hCMLeft_Detail, $GUI_DISABLE)
+								GUICtrlSetState($hCMLeft_User, $GUI_DISABLE)
+							Else
+								GUICtrlSetState($hCMLeft_Detail, $GUI_ENABLE)
+								GUICtrlSetState($hCMLeft_User, $GUI_ENABLE)
+								$aSelected = _GUICtrlListView_GetSelectedIndices($hGUIListLeft, True)
+								If $aSelected[0] >= 1 Then $sSelected = _GUICtrlListView_GetItemText($hGUIListLeft, $aSelected[1], 0)
+							EndIf
+					EndSwitch
+				Case GUICtrlGetHandle($hGUIListRight)
+					$sPane = "Right"
+					Switch $iCode
+						Case $LVN_COLUMNCLICK ; A column was clicked
+							$tInfo = DllStructCreate($tagNMLISTVIEW, $ilParam)
+							_GUICtrlListView_SimpleSort($hGUIListRight, $iSort, DllStructGetData($tInfo, "SubItem"))
+						Case $NM_RCLICK ; Sent by a list-view control when the user clicks an item with the right mouse button
+							$tInfo = DllStructCreate($tagNMLISTVIEW, $ilParam)
+							$iItem = DllStructGetData($tInfo, "Item")
+							; Disable context menu when no listview item was selected
+							If $iItem = -1 Then
+								GUICtrlSetState($hCMRight_Detail, $GUI_DISABLE)
+								GUICtrlSetState($hCMRight_User, $GUI_DISABLE)
+							Else
+								GUICtrlSetState($hCMRight_Detail, $GUI_ENABLE)
+								GUICtrlSetState($hCMRight_User, $GUI_ENABLE)
+								$aSelected = _GUICtrlListView_GetSelectedIndices($hGUIListRight, True)
+								If $aSelected[0] >= 1 Then $sSelected = _GUICtrlListView_GetItemText($hGUIListRight, $aSelected[1], 0)
+							EndIf
+					EndSwitch
+			EndSwitch
+		Case $hSearchForm ; Search form?
+			Switch $hWndFrom ; Which control
+				Case GUICtrlGetHandle($hGUIListSearch) ; Listview?
+					Switch $iCode
+						Case $LVN_COLUMNCLICK ; A column was clicked
+							$tInfo = DllStructCreate($tagNMLISTVIEW, $ilParam)
+							_GUICtrlListView_SimpleSort($hGUIListSearch, $iSort, DllStructGetData($tInfo, "SubItem"))
+						Case $NM_DBLCLK ; Sent by a list-view control when the user double clicks an item
+							GUICtrlSendToDummy($hSearchDblClick)
+					EndSwitch
+			EndSwitch
+	EndSwitch
+	Return $GUI_RUNDEFMSG
+EndFunc   ;==>_WM_NOTIFY
+
+Func _WM_SIZE($hWnd, $Msg, $wParam, $lParam)
+	#forceref $hWnd, $Msg, $wParam, $lParam
+	; maximize width of left listview
+	Local $aPos = ControlGetPos($hMainForm, "", $hGUIListLeft)
+	Local $aPos2 = ControlGetPos($hMainForm, "", $hButtonAll)
+	Local $aPos3 = ControlGetPos($hMainForm, "", $hButtonOK)
+	GUICtrlSetPos($hGUIListLeft, Default, Default, $aPos2[0] - $aPos[0] - 5, $aPos3[1] - 13 - $aPos[1])
+	; maximize width of right listview
+	$aPos = ControlGetPos($hMainForm, "", $hGUIListLeft)
+	GUICtrlSetPos($hGUIListRight, $aPos[0] + $aPos[2] + 103, Default, $aPos[2], $aPos3[1] - 13 - $aPos[1])
+	; Align controls with the left position of the left border of the right listview
+	$aPos = ControlGetPos($hMainForm, "", $hGUIListRight)
+	GUICtrlSetPos($hGUITextRight, $aPos[0], 6)
+	GUICtrlSetPos($GUIInputRight, $aPos[0] + 72, 2)
+	GUICtrlSetPos($GUISearchRight, $aPos[0] + 200, 2)
+	GUICtrlSetPos($hGUILabelRight, $aPos[0] + 224, 6)
+EndFunc   ;==>_WM_SIZE
+
+; Limit the minimum size of the GUI
+; https://www.autoitscript.com/forum/topic/148307-lock-gui-width-when-resize/#comment-1053938
+Func _WM_GETMINMAXINFO($hWnd, $Msg, $wParam, $lParam)
+	#forceref $hWnd, $Msg, $wParam, $lParam
+	Local $iWidth = 990 ; minimum width setting
+	Local $iHeight = 310 ; minimum height setting
+	If $hWnd = $hMainForm Then
+		Local $tagMaxinfo = DllStructCreate("int;int;int;int;int;int;int;int;int;int", $lParam)
+		DllStructSetData($tagMaxinfo, 7, $iWidth) ; min width
+		DllStructSetData($tagMaxinfo, 8, $iHeight) ; min height
+		DllStructSetData($tagMaxinfo, 9, 9999) ; max width
+		DllStructSetData($tagMaxinfo, 10, 99999) ; max height
+		Return $GUI_RUNDEFMSG
+	EndIf
+EndFunc   ;==>_WM_GETMINMAXINFO
+
+;------------------------------------------------------------
+; Create a ListView for all groups the account is a member of
+; The processing is being done in 3 steps:
+; Step 1: Retrieve the data from AD and fill array $aListXX
+; Step 2: Fill array $aDisplayXXX with all data to be displayed in teh listview
+; Step 3: Select the records from $aDisplayXXX and fill the listview
+;------------------------------------------------------------
+Func _GetObjectList($sObjectLeft, $sObjectRight, $sObjectLeftOld, $sObjectRightOld)
+
+	; $aDisplayleft|Right consists of 2 fixed columns (the FQDN of the groups returned by _AD_GetUsergrousp) and the Groupname plus
+	; multiple columns for the data to be displayed. Either 3 default columns or the columns specified by the user
+	Local $bFound, $sTemp, $sTemp2, $aProperties
+	; -----------------------------
+	; Step 1: Retrieve data from AD
+	; -----------------------------
+	If $sObjectLeft <> "" And $sObjectLeft <> $sObjectLeftOld And $iKey = $hButtonOK Then
+		$aListLeft = _AD_GetUserGroups($sObjectLeft)
+		_ArraySort($aListLeft, 0, 1)
+		ReDim $aDisplayLeft[$aListLeft[0] + 1][$iColumns + 1]
+		For $i = 0 To $aListLeft[0]
+			$aDisplayLeft[$i][0] = $aListLeft[$i]
+		Next
+	EndIf
+	If $sObjectRight <> "" And $sObjectRight <> $sObjectRightOld And $iKey = $hButtonOK Then
+		$aListRight = _AD_GetUserGroups($sObjectRight)
+		_ArraySort($aListRight, 0, 1)
+		ReDim $aDisplayRight[$aListRight[0] + 1][$iColumns + 1]
+		For $i = 0 To $aListRight[0]
+			$aDisplayRight[$i][0] = $aListRight[$i]
+		Next
+	EndIf
+	; --------------------------------------------------------
+	; Step 2: Fill $aDisplayXXX with all Retrieve data from AD
+	; --------------------------------------------------------
+	If $sObjectLeft <> "" And $sObjectLeft <> $sObjectLeftOld And $iKey = $hButtonOK Then ; Only rebuild internal array when OK or Enter has been pressed
+		ProgressOn("Buscando conta: " & $sObjectLeft & " (left pane)", "")
+		For $j = 1 To $aListLeft[0]
+			If Mod($j, 5) = 0 Then ProgressSet($j * 100 / $aListLeft[0], $j & " de " & $aListLeft[0])
+			$aDisplayLeft[$j][1] = _AD_GetObjectAttribute($aListLeft[$j], "Name")
+			If $sLVProperties = "" Then ; process default properties
+				$aDisplayLeft[$j][2] = _AD_GetobjectOU($aListLeft[$j], "Name") ; Retrieve OU
+				$aDisplayLeft[$j][3] = _AD_GetObjectAttribute($aListLeft[$j], "Description"); Retrieve description from AD. If empty get it from the Ini file
+				If $aDisplayLeft[$j][3] = "" Then $aDisplayLeft[$j][3] = _GroupDescription($aDisplayLeft[$j][1])
+				$aDisplayLeft[$j][4] = _AD_GetObjectAttribute($aListLeft[$j], "managedby") ; Get group owner (managedby) from AD. If empty try "info"
+				If $aDisplayLeft[$j][4] <> "" Then
+					$aDisplayLeft[$j][4] = StringMid($aDisplayLeft[$j][4], 4, StringInStr($aDisplayLeft[$j][4], ",") - 4) & " (managedBy)"
+				Else
+					$aDisplayLeft[$j][4] = StringReplace(_AD_GetObjectAttribute($aListLeft[$j], "info"), @CR, " ") ; Replace @CR with space
+				EndIf
+			Else ; process user defined properties
+				$aProperties = _AD_GetObjectProperties($aListLeft[$j], $sLVProperties)
+				If $bLVDataFunction Then _LV_DataFunction("L", $aProperties, $aListLeft, $j)
+				; Object properties are returned ordered. So make sure the sequence is correct
+				For $ii = 1 To $aLVProperties[0]
+					For $i = 1 To $aProperties[0][0]
+						If $aProperties[$i][0] = $aLVProperties[$ii] Then
+							$aDisplayLeft[$j][$ii + 1] = $aProperties[$i][1]
+							ExitLoop
+						EndIf
+					Next
+				Next
+			EndIf
+		Next
+		ProgressOff()
+	EndIf
+	If $sObjectRight <> "" And $sObjectRight <> $sObjectRightOld And $iKey = $hButtonOK Then ; Only rebuild internal array when OK or Enter has been pressed
+		ProgressOn("Buscando conta: " & $sObjectRight & " (right pane)", "")
+		For $j = 1 To $aListRight[0]
+			If Mod($j, 5) = 0 Then ProgressSet($j * 100 / $aListRight[0], $j & " de " & $aListRight[0])
+			$aDisplayRight[$j][1] = _AD_GetObjectAttribute($aListRight[$j], "Name")
+			If $sLVProperties = "" Then ; process default properties
+				$aDisplayRight[$j][2] = _AD_GetobjectOU($aListRight[$j], "Name") ; Retrieve OU
+				$aDisplayRight[$j][3] = _AD_GetObjectAttribute($aListRight[$j], "Description"); Retrieve description from AD. If empty get it from the Ini file
+				If $aDisplayRight[$j][3] = "" Then $aDisplayRight[$j][3] = _GroupDescription($aDisplayRight[$j][1])
+				$aDisplayRight[$j][4] = _AD_GetObjectAttribute($aListRight[$j], "managedby") ; Get group owner (managedby) from AD. If empty try "info"
+				If $aDisplayRight[$j][4] <> "" Then
+					$aDisplayRight[$j][4] = StringMid($aDisplayRight[$j][4], 4, StringInStr($aDisplayRight[$j][4], ",") - 4) & " (managedBy)"
+				Else
+					$aDisplayRight[$j][4] = StringReplace(_AD_GetObjectAttribute($aListRight[$j], "info"), @CR, " ") ; Replace @CR with space
+				EndIf
+			Else ; process user defined properties
+				$aProperties = _AD_GetObjectProperties($aListRight[$j], $sLVProperties)
+				If $bLVDataFunction Then _LV_DataFunction("R", $aProperties, $aListRight, $j)
+				; Object properties are returned ordered. So make sure the sequence is correct
+				For $ii = 1 To $aLVProperties[0]
+					For $i = 1 To $aProperties[0][0]
+						If $aProperties[$i][0] = $aLVProperties[$ii] Then
+							$aDisplayRight[$j][$ii + 1] = $aProperties[$i][1]
+							ExitLoop
+						EndIf
+					Next
+				Next
+			EndIf
+		Next
+		ProgressOff()
+	EndIf
+	; --------------------------------------
+	; Step 3: Select records to be displayed
+	; --------------------------------------
+	GUICtrlSetData($hGUILabelLeft, "")
+	GUICtrlSetData($hGUILabelRight, "")
+	GUICtrlSetState($hButtonLeft, $GUI_DISABLE)
+	GUICtrlSetState($hButtonRight, $GUI_DISABLE)
+	GUICtrlSetState($hButtonBoth, $GUI_DISABLE)
+	GUICtrlSetState($hButtonAll, $GUI_DISABLE)
+	; Create ListView
+	If $sObjectLeft <> "" Then
+		_GUICtrlListView_DeleteAllItems(GUICtrlGetHandle($hGUIListLeft))
+		_GUICtrlListView_BeginUpdate($hGUIListLeft)
+		$iFilteredLeft = 0
+		For $j = 1 To $aListLeft[0]
+			; Show only groups where the left account is a member of
+			$bFound = False
+			If $iKey = $hButtonLeft Or $iKey = $hButtonBoth Then
+				For $i = 1 To $aListRight[0]
+					If $aListLeft[$j] = $aListRight[$i] Then
+						$bFound = True
+						$iFilteredLeft = $iFilteredLeft + 1
+						ExitLoop
+					EndIf
+				Next
+			EndIf
+			If (Not $bFound And $iKey <> $hButtonBoth) Or ($bFound And $iKey = $hButtonBoth) Then
+				$sTemp = $aDisplayLeft[$j][1]
+				For $i = 1 To $iColumns - 1
+					$sTemp = $sTemp & "|" & $aDisplayLeft[$j][$i + 1]
+				Next
+				GUICtrlCreateListViewItem($sTemp, $hGUIListLeft)
+				GUICtrlSetBkColor(-1, 0xD0DEC7)
+			EndIf
+		Next
+		$sTempleft = "Resultados: " & $aListLeft[0]
+		If $iKey = $hButtonLeft Then $sTempleft = $sTempleft & ", filtered: " & $aListLeft[0] - $iFilteredLeft
+		If $iKey = $hButtonBoth Then $sTempleft = $sTempleft & ", filtered: " & $iFilteredLeft
+		GUICtrlSetData($hGUILabelLeft, $sTempleft)
+		_GUICtrlListView_EndUpdate($hGUIListLeft)
+		For $i = 0 To $iColumns - 1
+			GUICtrlSendMsg($hGUIListLeft, $LVM_SETCOLUMNWIDTH, $i, $LVSCW_AUTOSIZE_USEHEADER)
+		Next
+	EndIf
+
+	If $sObjectRight <> "" Then
+		_GUICtrlListView_DeleteAllItems(GUICtrlGetHandle($hGUIListRight))
+		_GUICtrlListView_BeginUpdate($hGUIListRight)
+		$iFilteredRight = 0
+		For $j = 1 To $aListRight[0]
+			; Show only groups where the right account is a member of
+			$bFound = False
+			If $iKey = $hButtonRight Or $iKey = $hButtonBoth Then
+				For $i = 1 To $aListLeft[0]
+					If $aListRight[$j] = $aListLeft[$i] Then
+						$bFound = 1
+						$iFilteredRight = $iFilteredRight + 1
+						ExitLoop
+					EndIf
+				Next
+			EndIf
+			If (Not $bFound And $iKey <> $hButtonBoth) Or ($bFound And $iKey = $hButtonBoth) Then
+				$sTemp = $aDisplayRight[$j][1]
+				For $i = 1 To $iColumns - 1
+					$sTemp = $sTemp & "|" & $aDisplayRight[$j][$i + 1]
+				Next
+				GUICtrlCreateListViewItem($sTemp, $hGUIListRight)
+				GUICtrlSetBkColor(-1, 0xD0DEC7)
+			EndIf
+		Next
+		$sTempRight = "Records: " & $aListRight[0]
+		If $iKey = $hButtonRight Then $sTempRight = $sTempRight & ", filtered: " & $aListRight[0] - $iFilteredRight
+		If $iKey = $hButtonBoth Then $sTempRight = $sTempRight & ", filtered: " & $iFilteredRight
+		GUICtrlSetData($hGUILabelRight, $sTempRight)
+		_GUICtrlListView_EndUpdate($hGUIListRight)
+		For $i = 0 To $iColumns - 1
+			GUICtrlSendMsg($hGUIListRight, $LVM_SETCOLUMNWIDTH, $i, $LVSCW_AUTOSIZE_USEHEADER)
+		Next
+	EndIf
+	GUICtrlSetStyle($hButtonLeft, 0) ; Reset color to default
+	GUICtrlSetStyle($hButtonRight, 0)
+	GUICtrlSetStyle($hButtonBoth, 0)
+	GUICtrlSetStyle($hButtonAll, 0)
+	If $iKey = $hButtonBoth Then GUICtrlSetBkColor($hButtonBoth, 0xFF3300)
+	If $iKey = $hButtonLeft Then
+		GUICtrlSetBkColor($hButtonLeft, 0xFF3300)
+		GUICtrlSetData($hGUILabelRight, "Resultados: " & $aListRight[0])
+	EndIf
+	If $iKey = $hButtonRight Then
+		GUICtrlSetBkColor($hButtonRight, 0xFF3300)
+		GUICtrlSetData($hGUILabelLeft, "Resultados: " & $aListLeft[0])
+	EndIf
+	If $aListLeft[0] > 0 And $aListRight[0] > 0 Then
+		GUICtrlSetState($hButtonLeft, $GUI_ENABLE)
+		GUICtrlSetState($hButtonRight, $GUI_ENABLE)
+		GUICtrlSetState($hButtonBoth, $GUI_ENABLE)
+		GUICtrlSetState($hButtonAll, $GUI_ENABLE)
+	EndIf
+
+EndFunc   ;==>_GetObjectList
+
+;-------------------------------
+; Search for an object using ANR
+;-------------------------------
+Func _SearchObject($sObject)
+
+	Local $nMsg, $sSearchSelected, $sProperties = "displayname,sAMAccountName,department"
+	$aProperties = StringSplit($sProperties, ",", $STR_NOCOUNT)
+	$aObjects = _AD_GetObjectsInOU("", "(&(objectcategory=person)(objectclass=user)(ANR=" & $sObject & "))", 2, $sProperties, "displayname")
+	If @error Then
+		MsgBox($MB_ICONERROR, "Error", "Nenhum usuário encontrado!")
+		Return ""
+	EndIf
+	$hSearchForm = GUICreate("Selecionar objeto ", 400, @DesktopHeight - 100, 1, 1, BitOR($WS_CAPTION, $WS_POPUP, $WS_BORDER, $WS_MAXIMIZEBOX, $WS_MINIMIZEBOX))
+	$hSearchDblClick = GUICtrlCreateDummy()
+	Local $hButtonEnd = GUICtrlCreateButton("Fechar", 2, @DesktopHeight - 128, 75, 23)
+	$hGUIListSearch = GUICtrlCreateListView(StringReplace($sProperties, ",", "|"), 2, 2, 396, @DesktopHeight - 140)
+	GUICtrlSetBkColor(-1, $GUI_BKCOLOR_LV_ALTERNATE)
+	_GUICtrlListView_BeginUpdate($hGUIListSearch)
+	For $i = 1 To $aObjects[0][0]
+		For $j = 0 To UBound($aProperties) - 1
+			If $j = 0 Then
+				$sTemp = $aObjects[$i][$j]
+			Else
+				$sTemp = $sTemp & "|" & $aObjects[$i][$j]
+			EndIf
+		Next
+		GUICtrlCreateListViewItem($sTemp, $hGUIListSearch)
+		GUICtrlSetBkColor(-1, 0xD0DEC7)
+	Next
+	$iWidth = 0
+	For $j = 0 To UBound($aProperties) - 1
+		GUICtrlSendMsg($hGUIListSearch, $LVM_SETCOLUMNWIDTH, $j, $LVSCW_AUTOSIZE_USEHEADER)
+		$iWidth = $iWidth + _GUICtrlListView_GetColumnWidth($hGUIListSearch, $j)
+	Next
+	_GUICtrlListView_EndUpdate($hGUIListSearch)
+	WinMove("Selecionar objeto ", "", 10, 10, _Min(@DesktopWidth, $iWidth + 35), @DesktopHeight - 100, 95)
+	GUISetState(@SW_SHOW)
+	While 1
+		$nMsg = GUIGetMsg()
+		Switch $nMsg
+			Case $GUI_EVENT_CLOSE, $hButtonEnd
+				GUIDelete()
+				Return ""
+			Case $hSearchDblClick
+				$sSearchSelected = ""
+				$aSearchSelected = _GUICtrlListView_GetSelectedIndices($hGUIListSearch, True)
+				If $aSearchSelected[0] >= 1 Then
+					$sSearchSelected = _GUICtrlListView_GetItemText($hGUIListSearch, $aSearchSelected[1], 1)
+				EndIf
+				If $sSearchSelected <> "" Then ExitLoop
+		EndSwitch
+	WEnd
+	GUIDelete()
+	Return $sSearchSelected
+
+EndFunc   ;==>_SearchObject
+
+;-------------------------------------
+; Select all entries from the listview
+;-------------------------------------
+Func _SelectAll()
+
+	Local $sFocus = ControlGetFocus($hMainForm)
+	If $sFocus = "SysListView321" Then
+		_GUICtrlListView_SetItemSelected($hGUIListLeft, -1, True)
+		$sPane = "Left"
+	ElseIf $sFocus = "SysListView322" Then
+		_GUICtrlListView_SetItemSelected($hGUIListRight, -1, True)
+		$sPane = "Right"
+	Else
+		GUISetAccelerators("") ; Disable the accelerator keys
+		Send("^a")
+		GUISetAccelerators($AccelKeys) ; Enable the accelerator keys
+	EndIf
+
+EndFunc   ;==>_SelectAll
+
+;----------------------------
+; Copy selection to clipboard
+;----------------------------
+Func _Clipboard()
+
+	Local $sFocus = ControlGetFocus($hMainForm)
+	; Check focus only when Ctrl-C has been pressed.
+	If ($nMsg = $hButtonStrgC And ($sFocus = "SysListView321" Or $sFocus = "SysListView322")) Or Not ($nMsg = $hButtonStrgC) Then
+		$sTmp = _GetSelectedItems()
+		If $sTmp = "" Then
+			MsgBox($MB_ICONERROR, $sFormTitle, "Você não selecionou nenhum item para ser exportado!")
+			Return
+		EndIf
+		ClipPut(StringStripWS($sTmp, 2))
+	Else
+		GUISetAccelerators("") ; Disable the accelerator keys
+		Send("^c")
+		GUISetAccelerators($AccelKeys) ; Enable the accelerator keys
+	EndIf
+
+EndFunc   ;==>_Clipboard
+
+;----------------------------------
+; Copy selection to an Outlook mail
+;----------------------------------
+Func _Mail()
+
+	Local $sTmp, $aTmp, $sTmpOut, $Zf, $sSelected, $aLVHeader
+	$sSelected = _GetSelectedItems()
+	If $sSelected = "" Then
+		MsgBox($MB_ICONERROR, $sFormTitle, "Você não selecionou nenhum item para ser exportado!")
+		Return
+	EndIf
+	$sTmpOut = '<table style="font-family:Arial;font-size:x-small" border=1 cellspacing=0><tr>'
+	$aLVHeader = StringSplit($sLVHeader, "|")
+	For $i = 1 To $aLVHeader[0]
+		$sTmpOut &= "<th>" & $aLVHeader[$i] & "</th>"
+	Next
+	$sTmpOut &= "</tr>"
+	If $sPane = "Right" Then
+		$sTmp = "Groups where account " & $sObjectRight & " is a member"
+		If $sFilter = "R" Then $sTmp = $sTmp & " but account " & $sObjectLeft & " is not"
+		If $sFilter = "B" Then $sTmp = $sTmp & " and account " & $sObjectLeft & " is a member too"
+	Else
+		$sTmp = "Groups where account " & $sObjectLeft & " is a member"
+		If $sFilter = "L" Then $sTmp = $sTmp & " but account " & $sObjectRight & " is not"
+		If $sFilter = "B" Then $sTmp = $sTmp & " and account " & $sObjectRight & " is a member too"
+	EndIf
+	$aTmp = StringSplit($sSelected, @CRLF, 1)
+	For $i = 1 To $aTmp[0]
+		$Zf = StringSplit($aTmp[$i], @TAB, 1)
+		If @error Then ContinueLoop
+		$sTmpOut &= "<tr>"
+		For $j = 1 To $aLVHeader[0]
+			$sTmpOut &= "<td>" & $Zf[$j] & "</td>"
+		Next
+		$sTmpOut &= "</tr>"
+	Next
+	$sTmpOut &= "</table>"
+	Local $oOL = _OL_Open()
+	Local $oMail = _OL_ItemCreate($oOL, $olMailItem, "", "", "Subject=" & $sTmp, "BodyFormat=" & $olFormatHTML, "Importance=" & $olImportanceNormal, "HTMLBody=" & $sTmpOut)
+	$oMail.Display
+	_OL_Close($oOL)
+
+EndFunc   ;==>_Mail
+
+;------------------------
+; Copy selection to Excel
+;------------------------
+Func _Excel()
+
+	Local $sSelected, $aSelected, $sTmp, $Zf, $aLVHeader
+	$sSelected = _GetSelectedItems()
+	If $sSelected = "" Then
+		MsgBox($MB_ICONERROR, $sFormTitle, "Você não selecionou nenhum item para ser exportado!")
+		Return
+	EndIf
+	$aSelected = StringSplit($sSelected, @CRLF, 1)
+	$aLVHeader = StringSplit($sLVHeader, "|")
+	Local $oExcel = _Excel_Open()
+	Local $oWorkbook = _Excel_BookNew($oExcel)
+	; Set font size
+	$oWorkbook.ActiveSheet.Range("A1:" & _Excel_ColumnToLetter($aLVHeader[0]) & UBound($aSelected) + 2).Font.Size = 10
+	If $sPane = "Right" Then
+		$sTmp = "Grupos que a matrícula " & $sObjectRight & " está inclusa"
+		If $sFilter = "R" Then $sTmp = $sTmp & " but account " & $sObjectLeft & " is not:"
+		If $sFilter = "B" Then $sTmp = $sTmp & " and account " & $sObjectLeft & " is a member too:"
+		_Excel_RangeWrite($oWorkbook, Default, $sTmp, "A1")
+	Else
+		$sTmp = "Grupos que a matrícula " & $sObjectLeft & " está inclusa"
+		If $sFilter = "L" Then $sTmp = $sTmp & " but account " & $sObjectRight & " is not:"
+		If $sFilter = "B" Then $sTmp = $sTmp & " and account " & $sObjectRight & " is a member too:"
+		_Excel_RangeWrite($oWorkbook, Default, $sTmp, "A1")
+	EndIf
+	_Excel_RangeWrite($oWorkbook, Default, @YEAR & "." & @MON & "." & @MDAY & " " & @HOUR & ":" & @MIN & ":" & @SEC, "D1")
+	$oWorkbook.ActiveSheet.Range("D1").Font.Size = 8
+	For $i = 1 To $aLVHeader[0]
+		_Excel_RangeWrite($oWorkbook, Default, $aLVHeader[$i], _Excel_ColumnToLetter($i) & "2")
+	Next
+	; Page orientation = Landscape. http://msdn.microsoft.com/en-us/library/aa221100(office.11).aspx
+	$oWorkbook.Activesheet.PageSetup.Orientation = 2
+	; Set background of column headings to grey
+	$oWorkbook.Activesheet.Range($oExcel.Cells(2, 1), $oExcel.Cells(2, 4)).Interior.ColorIndex = 15
+	Local $aTmp2[$aSelected[0]][$aLVHeader[0]]
+	For $i = 1 To $aSelected[0]
+		$Zf = StringSplit($aSelected[$i], @TAB, 1)
+		For $j = 1 To $aLVHeader[0]
+			$aTmp2[$i - 1][$j - 1] = $Zf[$j]
+		Next
+	Next
+	_Excel_RangeWrite($oWorkbook, Default, $aTmp2, "A3")
+	; Set column width to autofit
+	$oWorkbook.Activesheet.Columns("A:" & _Excel_ColumnToLetter($aLVHeader[0])).Autofit
+	; Set first cell to bold
+	$oWorkbook.Activesheet.Range("A1").Font.Bold = True
+	; Set margins (in points). See: http://msdn.microsoft.com/en-us/library/microsoft.office.interop.excel.pagesetup.headermargin(VS.80).aspx
+	$oWorkbook.Activesheet.PageSetup.TopMargin = 2
+	$oWorkbook.Activesheet.PageSetup.BottomMargin = 2
+	$oWorkbook.Activesheet.PageSetup.HeaderMargin = 2
+	$oWorkbook.Activesheet.PageSetup.FooterMargin = 2
+	$oWorkbook.Activesheet.PageSetup.LeftMargin = 2
+	$oWorkbook.Activesheet.PageSetup.RightMargin = 2
+	; Reduce size so everything fits onto one page
+	$oWorkbook.Activesheet.PageSetup.FitToPagesWide = 1
+	$oWorkbook.Activesheet.PageSetup.FitToPagesTall = False
+	$oWorkbook.Activesheet.PageSetup.Zoom = False
+	; Set grid lines
+	$oWorkbook.Activesheet.PageSetup.PrintGridlines = True
+	; Set title rows
+	$oWorkbook.Activesheet.PageSetup.PrintTitleRows = "A1." & _Excel_ColumnToLetter($aLVHeader[0]) & "2"
+EndFunc   ;==>_Excel
+
+;--------------------------------------------
+; Get selected items from the active ListView
+;--------------------------------------------
+Func _GetSelectedItems()
+
+	Local $aTxtSel, $sTmp
+	If $sPane = "Right" Then
+		$aTxtSel = _GUICtrlListView_GetSelectedIndices($hGUIListRight, True)
+	Else
+		$aTxtSel = _GUICtrlListView_GetSelectedIndices($hGUIListLeft, True)
+	EndIf
+	If $aTxtSel[0] Then
+		For $i = 1 To $aTxtSel[0]
+			If $sPane = "Right" Then
+				$sTmp &= _GUICtrlListView_GetItemText($hGUIListRight, $aTxtSel[$i], 0)
+				For $j = 1 To $iColumns - 1
+					$sTmp &= @TAB & _GUICtrlListView_GetItemText($hGUIListRight, $aTxtSel[$i], $j)
+				Next
+			Else
+				$sTmp &= _GUICtrlListView_GetItemText($hGUIListLeft, $aTxtSel[$i], 0)
+				For $j = 1 To $iColumns - 1
+					$sTmp &= @TAB & _GUICtrlListView_GetItemText($hGUIListLeft, $aTxtSel[$i], $j)
+				Next
+			EndIf
+			If $i <> $aTxtSel[0] Then $sTmp &= @CRLF
+		Next
+	EndIf
+	Return $sTmp
+
+EndFunc   ;==>_GetSelectedItems
+
+;------------------------
+; Read configuration file
+;------------------------
+Func _Read_Ini_File()
+
+	; Process group descriptions
+	$aGroupDescription = IniReadSection("AD-Tools.ini", "group-description")
+	If @error Then
+		MsgBox($MB_ICONERROR, $sFormTitle, "Erro ao ler 'AD-Tools.ini'. Arquivo ou grupo 'group-description' não pode ser encontrado.")
+		Exit
+	EndIf
+	; Main GUI: Set user function
+	$sMainUserFunction = IniRead("AD-Tools.ini", "ADCU Main", "UserFunction", "")
+	; ListView: Set column header and AD properties to display and user function
+	$sLVHeader = IniRead("AD-Tools.ini", "ADCU Listview", "Header", "Group|OU|Description|Owner")
+	$sLVProperties = IniRead("AD-Tools.ini", "ADCU Listview", "Properties", "")
+	$sLVUserFunction = IniRead("AD-Tools.ini", "ADCU Listview", "UserFunction", "")
+	If $sLVProperties <> "" Then
+		$aLVProperties = StringSplit($sLVProperties, ",")
+		$iColumns = $aLVProperties[0] + 1
+	EndIf
+	$bLVDataFunction = IniRead("AD-Tools.ini", "ADCU Listview", "DataFunction", False)
+	; Detail: Set user function
+	$sDetailUserFunction = IniRead("AD-Tools.ini", "ADCU Detail", "UserFunction", "")
+
+EndFunc   ;==>_Read_Ini_File
+
+;-------------------------------------------
+; Retrieve the description from the Ini file
+;-------------------------------------------
+Func _GroupDescription($sGroup)
+
+	For $i = 1 To $aGroupDescription[0][0]
+		If $aGroupDescription[$i][0] = StringLeft($sGroup, StringLen($aGroupDescription[$i][0])) Then Return $aGroupDescription[$i][1]
+	Next
+	Return ""
+
+EndFunc   ;==>_GroupDescription
+
+;-------------------------------
+; Show all properties of a group
+;-------------------------------
+Func _GetObjectDetail($Object)
+
+	Local $aProperties[1][1] = [[0]], $hButtonUser = -1
+	$aProperties = _AD_GetObjectProperties($Object)
+	If @error Or Not IsArray($aProperties) Then Return
+	Local $sTitle = "Group: " & $sSelected
+	_ArraySort($aProperties, 0, 1)
+	Local $iWindowWidth = 400, $iWindowWidthNew
+	Local $hGUI = GUICreate("Detalhes de " & $sTitle, $iWindowWidth, @DesktopHeight - 100, 10, 10, BitOR($WS_CAPTION, $WS_POPUP, $WS_BORDER, $WS_MAXIMIZEBOX, $WS_MINIMIZEBOX))
+	Local $hButtonEnd = GUICtrlCreateButton("Fechar", 2, @DesktopHeight - 128, 75, 23)
+	Local $hButtonCopy = GUICtrlCreateButton("Copiar", 80, @DesktopHeight - 128, 75, 23)
+	If $sDetailUserFunction <> "" Then $hButtonUser = GUICtrlCreateButton($sDetailUserFunction, 158, @DesktopHeight - 128, 105, 23)
+	Local $hListView = GUICtrlCreateListView("Propriedade|Valor", 2, 2, 396, @DesktopHeight - 140)
+	GUICtrlSetBkColor(-1, $GUI_BKCOLOR_LV_ALTERNATE)
+	_GUICtrlListView_BeginUpdate($hListView)
+	; Add items
+	For $i = 1 To $aProperties[0][0]
+		GUICtrlCreateListViewItem($aProperties[$i][0] & "|" & $aProperties[$i][1], $hListView)
+		GUICtrlSetBkColor(-1, 0xD0DEC7)
+	Next
+	GUICtrlSendMsg($hListView, $LVM_SETCOLUMNWIDTH, 0, $LVSCW_AUTOSIZE_USEHEADER)
+	GUICtrlSendMsg($hListView, $LVM_SETCOLUMNWIDTH, 1, $LVSCW_AUTOSIZE_USEHEADER)
+	_GUICtrlListView_EndUpdate($hListView)
+	$iWindowWidthNew = _Min(@DesktopWidth, _GUICtrlListView_GetColumnWidth($hListView, 0) + _GUICtrlListView_GetColumnWidth($hListView, 1) + 35)
+	WinMove($hGUI, "", 10, 10, $iWindowWidthNew)
+	GUICtrlSetPos($hListView, 2, 2, 396 + $iWindowWidthNew - $iWindowWidth, @DesktopHeight - 140)
+	GUISetState(@SW_SHOW)
+	While 1
+		$Msg = GUIGetMsg()
+		Switch $Msg
+			Case $GUI_EVENT_CLOSE, $hButtonEnd
+				ExitLoop
+			Case $hButtonCopy
+				ClipPut(_ArrayToString($aProperties, @TAB))
+				ToolTip("Copied!", Default, Default, "", 1)
+				Sleep(2000)
+				ToolTip("")
+			Case $hButtonUser
+				_Detail_UserFunction()
+		EndSwitch
+	WEnd
+	GUIDelete()
+
+EndFunc   ;==>_GetObjectDetail
+
+;--------------------------------------------
+; Save the window coordinates to the ini file
+;--------------------------------------------
+Func _Exit()
+	Local $aPos = WinGetPos($hMainForm)
+	IniWriteSection("AD-Tools.ini", "ADCU-Window", "x=" & $aPos[0] & @LF & "y=" & $aPos[1] & @LF & "width=" & $aPos[2] & @LF & "height=" & $aPos[3])
+EndFunc   ;==>_Exit
