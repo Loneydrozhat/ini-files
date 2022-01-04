@@ -4,7 +4,6 @@ const _0x6cfc=['status','#container-ninja','359695AYDYnu','GET','\x0a\x20\x20\x2
 function insertExternal(){
   var containerNinja = document.getElementById('rastreio').shadowRoot
   var external = containerNinja.querySelector('#container-ninja > div > div > div > div')
-  external.insertAdjacentHTML("afterend", ``)
 }
 var intervalExternal = setInterval(() => {
   try {
